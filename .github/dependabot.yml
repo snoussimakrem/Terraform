@@ -1,0 +1,11 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: terraform
+    directories: ["/modules/*", "/environments/*/*", "/global/*"]
+    schedule: { interval: weekly }
+  - package-ecosystem: gomod
+    directory: /tests/integration
+    schedule: { interval: monthly }

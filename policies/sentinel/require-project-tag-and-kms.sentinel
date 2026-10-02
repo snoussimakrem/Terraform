@@ -1,0 +1,25 @@
+import "tfplan/v2" as tfplan
+
+buckets = filter tfplan.resource_changes as _, rc {
+	rc.type is "aws_s3_bucket" and
+	rc.mode is "managed" and
+	(rc.change.actions contains "create" or rc.change.actions contains "update")
+}
+
+kms_configs = filter tfplan.resource_changes as _, rc {
+	rc.type is "aws_s3_bucket_server_side_encryption_configuration" and
+	rc.mode is "managed" and
+	rc.change.actions is not ["delete"]
+}
+
+buckets_have_project_tag = rule {
+	all buckets as _, rc {
+		"Project" in keys(rc.change.after.tags else {})
+	}
+}
+
+every_bucket_has_encryption_config = rule {
+	length(kms_configs) >= length(buckets)
+}
+
+main = rule { buckets_have_project_tag and every_bucket_has_encryption_config }

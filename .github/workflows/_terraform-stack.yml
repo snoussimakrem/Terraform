@@ -1,0 +1,78 @@
+# Reusable workflow: plan job -> (approval gate on the GitHub Environment) -> apply job.
+# The apply job applies the SAME plan file that was produced (and reviewable) in the plan job.
+name: _terraform-stack
+on:
+  workflow_call:
+    inputs:
+      environment: { type: string, required: true }
+      stack: { type: string, required: true }
+permissions: {}
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # needed to request the OIDC token. Nothing else is granted.
+    concurrency:
+      group: tf-state-${{ inputs.environment }}-${{ inputs.stack }} # never two runs on one state
+      cancel-in-progress: false # NEVER cancel a run mid-apply: that is how state gets corrupted
+    steps:
+      - uses: actions/checkout@REPLACE_WITH_FULL_SHA # v4
+        with: { persist-credentials: false }
+      - uses: hashicorp/setup-terraform@REPLACE_WITH_FULL_SHA # v3
+        with: { terraform_version_file: .terraform-version, terraform_wrapper: false }
+      - name: assume plan role via OIDC (no stored keys)
+        uses: aws-actions/configure-aws-credentials@REPLACE_WITH_FULL_SHA # v4
+        with:
+          role-to-arn: ${{ vars[format('AWS_PLAN_ROLE_ARN_{0}', upper(inputs.environment))] }}
+          aws-region: us-east-1
+          role-session-name: gha-plan-${{ github.run_id }}
+      - name: plan
+        run: MODE=aws ./scripts/stack.sh ${{ inputs.environment }} ${{ inputs.stack }} plan
+      - name: bundle plan with its working dir
+        run: tar -czf plan.tgz -C environments/${{ inputs.environment }}/${{ inputs.stack }} tfplan .terraform.lock.hcl
+      - uses: actions/upload-artifact@REPLACE_WITH_FULL_SHA # v4
+        with:
+          name: tfplan-${{ inputs.environment }}-${{ inputs.stack }}
+          path: plan.tgz
+          retention-days: 3 # plan files can contain secrets: keep them briefly
+
+  apply:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: ${{ inputs.environment }} # <- required reviewers are configured on this Environment
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: tf-state-${{ inputs.environment }}-${{ inputs.stack }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@REPLACE_WITH_FULL_SHA # v4
+        with: { persist-credentials: false }
+      - uses: hashicorp/setup-terraform@REPLACE_WITH_FULL_SHA # v3
+        with: { terraform_version_file: .terraform-version, terraform_wrapper: false }
+      - uses: actions/download-artifact@REPLACE_WITH_FULL_SHA # v4
+        with:
+          name: tfplan-${{ inputs.environment }}-${{ inputs.stack }}
+      - name: assume APPLY role (trust policy only accepts jobs bound to this Environment)
+        uses: aws-actions/configure-aws-credentials@REPLACE_WITH_FULL_SHA # v4
+        with:
+          role-to-arn: ${{ vars[format('AWS_APPLY_ROLE_ARN_{0}', upper(inputs.environment))] }}
+          aws-region: us-east-1
+          role-session-name: gha-apply-${{ github.run_id }}
+      - name: apply the reviewed plan
+        env:
+          TF_VAR_airflow_admin_password: ${{ secrets.AIRFLOW_ADMIN_PASSWORD }} # Environment secret
+          TF_VAR_localstack: "false"
+        run: |
+          D=environments/${{ inputs.environment }}/${{ inputs.stack }}
+          tar -xzf plan.tgz -C "$D"
+          terraform -chdir="$D" init -input=false -reconfigure \
+            -backend-config=../backend-aws.hcl \
+            -backend-config="key=${{ inputs.environment }}/${{ inputs.stack }}.tfstate"
+          # If state changed since the plan, Terraform refuses a stale plan file => safe by design.
+          terraform -chdir="$D" apply -input=false -lock-timeout=300s tfplan

@@ -1,0 +1,21 @@
+# Terraform working data & plans (plans can contain secrets!)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+tfplan.json
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+# Local secrets. Never commit. Use ephemeral values + a secret manager instead.
+*.auto.tfvars
+secret*.tfvars
+.env
+# Keep the lock file: it pins provider hashes (supply-chain control)
+!.terraform.lock.hcl
+# Tooling
+.localstack/
+kubeconfig*
+*.zip

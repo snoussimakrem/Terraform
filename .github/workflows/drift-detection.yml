@@ -1,0 +1,50 @@
+# Drift = real infrastructure no longer matches state/code (console edits, manual fixes, other tools).
+# `plan -detailed-exitcode`: 0 = no changes, 1 = error, 2 = changes (= drift). Runs read-only.
+name: drift-detection
+on:
+  schedule: [{ cron: "0 5 * * *" }]
+  workflow_dispatch: {}
+permissions: {}
+
+jobs:
+  drift:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [staging, prod]
+        stack: [10-network, 15-data-lake, 20-cluster]
+    steps:
+      - uses: actions/checkout@REPLACE_WITH_FULL_SHA # v4
+        with: { persist-credentials: false }
+      - uses: hashicorp/setup-terraform@REPLACE_WITH_FULL_SHA # v3
+        with: { terraform_version_file: .terraform-version, terraform_wrapper: false }
+      - uses: aws-actions/configure-aws-credentials@REPLACE_WITH_FULL_SHA # v4
+        with:
+          role-to-arn: ${{ vars[format('AWS_PLAN_ROLE_ARN_{0}', upper(matrix.env))] }}
+          aws-region: us-east-1
+      - id: plan
+        run: |
+          D=environments/${{ matrix.env }}/${{ matrix.stack }}
+          TF_VAR_localstack=false terraform -chdir=$D init -input=false \
+            -backend-config=../backend-aws.hcl -backend-config="key=${{ matrix.env }}/${{ matrix.stack }}.tfstate"
+          set +e
+          terraform -chdir=$D plan -input=false -detailed-exitcode -lock=false -no-color > drift.txt
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+      - name: open an issue if drift detected
+        if: steps.plan.outputs.code == '2'
+        uses: actions/github-script@REPLACE_WITH_FULL_SHA # v7
+        with:
+          script: |
+            await github.rest.issues.create({ ...context.repo,
+              title: `Drift detected: ${{ matrix.env }}/${{ matrix.stack }}`,
+              labels: ['drift'],
+              body: `Scheduled plan found changes. See run ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}. Triage with docs/runbook.md#drift.` });
+      - name: fail on plan error
+        if: steps.plan.outputs.code == '1'
+        run: exit 1

@@ -1,0 +1,5 @@
+# Infra changes need review from the platform owners. Edit handles for your org.
+*                       @OWNER/platform-team
+/.github/workflows/     @OWNER/platform-security
+/policies/              @OWNER/platform-security
+/global/iam/            @OWNER/platform-security

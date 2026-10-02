@@ -1,0 +1,13 @@
+# ADOPTING AN EXISTING RESOURCE with an `import` block (Terraform >= 1.5).
+# Scenario: someone created the GitHub OIDC provider by hand in the console.
+#
+# 1. Rename this file to import.tf and write the matching resource config (or let Terraform draft it):
+#      terraform plan -generate-config-out=generated.tf
+# 2. `terraform plan` shows "1 to import" - nothing is changed in the cloud yet.
+# 3. Review the plan, then apply. The import block can be deleted afterwards.
+#
+# Why this beats `terraform import` on the CLI: it is code-reviewed, appears in plans, and is repeatable.
+import {
+  to = module.ci_cd.aws_iam_openid_connect_provider.github
+  id = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+}

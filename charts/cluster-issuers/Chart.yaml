@@ -1,0 +1,4 @@
+apiVersion: v2
+name: cluster-issuers
+description: Self-signed CA chain for local TLS. Shipped as a chart so Terraform never needs the CRDs at plan time.
+version: 0.1.0

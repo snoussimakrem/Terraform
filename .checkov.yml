@@ -1,0 +1,9 @@
+# Every skip needs a written reason. Unexplained skips are how scanners get ignored.
+framework: [terraform]
+quiet: true
+skip-check:
+  - CKV_AWS_144   # S3 cross-region replication: out of scope for a learning platform (cost)
+  - CKV_AWS_18    # S3 access logging: needs a dedicated log bucket; tracked in docs/decisions/0009
+  - CKV2_AWS_62   # S3 event notifications: not used in this design
+  - CKV_AWS_145   # Reason: state bucket uses a dedicated KMS key; false positive on some versions
+  - CKV2_AWS_11   # VPC flow logs: cost-gated, enabled in prod via var.enable_flow_logs (future work)

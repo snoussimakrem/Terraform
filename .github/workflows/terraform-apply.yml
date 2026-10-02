@@ -1,0 +1,53 @@
+# Promotion pipeline: dev -> staging -> prod. Each stage needs the previous to succeed, and
+# staging/prod have required reviewers on their GitHub Environments (Settings > Environments).
+name: terraform-apply
+
+on:
+  push:
+    branches: [main]
+    paths: ["modules/**", "environments/**", "global/**", "charts/**"]
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  dev:
+    strategy:
+      max-parallel: 1 # stacks run in dependency order, one at a time
+      fail-fast: true
+      matrix:
+        stack: [10-network, 15-data-lake, 20-cluster, 30-platform, 40-data-services]
+    uses: ./.github/workflows/_terraform-stack.yml
+    with: { environment: dev, stack: "${{ matrix.stack }}" }
+    secrets: inherit
+    permissions:
+      contents: read
+      id-token: write
+
+  staging:
+    needs: dev
+    strategy:
+      max-parallel: 1
+      fail-fast: true
+      matrix:
+        stack: [10-network, 15-data-lake, 20-cluster, 30-platform, 40-data-services]
+    uses: ./.github/workflows/_terraform-stack.yml
+    with: { environment: staging, stack: "${{ matrix.stack }}" }
+    secrets: inherit
+    permissions:
+      contents: read
+      id-token: write
+
+  prod:
+    needs: staging
+    strategy:
+      max-parallel: 1
+      fail-fast: true
+      matrix:
+        stack: [10-network, 15-data-lake, 20-cluster, 30-platform, 40-data-services]
+    uses: ./.github/workflows/_terraform-stack.yml
+    with: { environment: prod, stack: "${{ matrix.stack }}" }
+    secrets: inherit
+    permissions:
+      contents: read
+      id-token: write

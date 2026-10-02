@@ -1,0 +1,15 @@
+# Local AWS emulator. COST: $0, but VERIFY LocalStack's current licensing/auth-token
+# requirements before relying on it (see docs/VERIFY.md). Fallback for S3-only work:
+# Garage or SeaweedFS, with far less AWS API coverage.
+services:
+  localstack:
+    image: localstack/localstack:${LOCALSTACK_TAG:-latest}
+    ports:
+      - "127.0.0.1:4566:4566"      # bound to loopback only: not exposed to your LAN
+    environment:
+      - SERVICES=s3,iam,kms,ec2,sts,secretsmanager,route53,ssm
+      - LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN:-}
+    volumes:
+      - localstack-data:/var/lib/localstack
+volumes:
+  localstack-data:

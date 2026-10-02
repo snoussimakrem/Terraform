@@ -1,0 +1,124 @@
+# Pull-request pipeline. Order = cheapest/fastest feedback first.
+# Every `uses:` must be a full 40-char commit SHA. Run `make pin-actions` (pinact) to fill these in:
+# a mutable tag like @v4 can be re-pointed by an attacker; a SHA cannot.
+name: terraform-plan
+
+on:
+  pull_request:
+    paths: ["modules/**", "environments/**", "global/**", "policies/**", "tests/**", "charts/**", ".github/workflows/**"]
+
+permissions: {} # deny-by-default at workflow level; each job opts in to the minimum
+
+concurrency:
+  group: tf-plan-${{ github.ref }}
+  cancel-in-progress: true # a newer push supersedes the old plan
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  static:
+    name: fmt / validate / tflint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@REPLACE_WITH_FULL_SHA # v4
+        with: { persist-credentials: false }
+      - uses: hashicorp/setup-terraform@REPLACE_WITH_FULL_SHA # v3
+        with: { terraform_version_file: .terraform-version, terraform_wrapper: false }
+      - run: terraform fmt -check -recursive -diff
+      - run: ./scripts/validate-all.sh
+      - uses: terraform-linters/setup-tflint@REPLACE_WITH_FULL_SHA # v4
+      - run: tflint --init && tflint --recursive --format compact
+        env: { GITHUB_TOKEN: "${{ github.token }}" } # avoids rate limits when downloading plugins
+
+  unit-tests:
+    name: terraform test (mocked)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@REPLACE_WITH_FULL_SHA # v4
+        with: { persist-credentials: false }
+      - uses: hashicorp/setup-terraform@REPLACE_WITH_FULL_SHA # v3
+        with: { terraform_version_file: .terraform-version, terraform_wrapper: false }
+      - run: ./scripts/test-all.sh
+
+  policy-unit:
+    name: OPA policy unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@REPLACE_WITH_FULL_SHA # v4
+        with: { persist-credentials: false }
+      - uses: open-policy-agent/setup-opa@REPLACE_WITH_FULL_SHA # v2
+      - run: opa test policies/opa -v
+
+  plan:
+    name: plan ${{ matrix.stack }} (LocalStack)
+    needs: [static, unit-tests, policy-unit]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write # to post the plan comment
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [10-network, 15-data-lake] # stacks needing a cluster are validated, not planned, in CI
+    services:
+      localstack:
+        image: localstack/localstack:latest # VERIFY licensing; pin a tag/digest in real use
+        ports: ["4566:4566"]
+        env:
+          SERVICES: s3,iam,kms,ec2,sts,secretsmanager
+          LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
+    env:
+      TF_VAR_localstack: "true"
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@REPLACE_WITH_FULL_SHA # v4
+        with: { persist-credentials: false }
+      - uses: hashicorp/setup-terraform@REPLACE_WITH_FULL_SHA # v3
+        with: { terraform_version_file: .terraform-version, terraform_wrapper: false }
+      - name: init (no backend: ephemeral CI state)
+        working-directory: environments/dev/${{ matrix.stack }}
+        run: terraform init -backend=false
+      - name: plan
+        working-directory: environments/dev/${{ matrix.stack }}
+        run: |
+          terraform plan -out=tfplan -no-color | tee plan.txt
+          terraform show -json tfplan > plan.json
+      - name: policy check (OPA via Conftest container)
+        run: |
+          # VERIFY the tag; pin by digest in real use.
+          docker run --rm -v "$PWD:/project" -w /project openpolicyagent/conftest:v0.56.0 \
+            test --policy policies/opa --all-namespaces environments/dev/${{ matrix.stack }}/plan.json
+      - name: comment plan on PR
+        uses: actions/github-script@REPLACE_WITH_FULL_SHA # v7
+        with:
+          script: |
+            const fs = require('fs');
+            const stack = '${{ matrix.stack }}';
+            let plan = fs.readFileSync(`environments/dev/${stack}/plan.txt`, 'utf8');
+            const MAX = 60000;
+            if (plan.length > MAX) plan = plan.slice(0, MAX) + '\n... (truncated, see artifact)';
+            const marker = `<!-- tf-plan:${stack} -->`;
+            const body = `${marker}\n### Terraform plan: \`dev/${stack}\`\n<details><summary>Show plan</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n</details>`;
+            const { data: comments } = await github.rest.issues.listComments({ ...context.repo, issue_number: context.issue.number });
+            const existing = comments.find(c => c.body.startsWith(marker));
+            if (existing) await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
+            else await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
+      - uses: actions/upload-artifact@REPLACE_WITH_FULL_SHA # v4
+        with:
+          name: plan-${{ matrix.stack }}
+          path: environments/dev/${{ matrix.stack }}/plan.json
+          retention-days: 7
